@@ -35,7 +35,6 @@ VkApp::VkApp(const Entry& entry, LPCTSTR caption, uint32_t width, uint32_t heigh
 
 VkApp::~VkApp()
 {
-    vkDestroyFence(device, transferFence, nullptr);
     for (auto fence: cmdSubmitFences)
         vkDestroyFence(device, fence, nullptr);
     vkDestroySemaphore(device, presentSemaphore, nullptr);
@@ -84,10 +83,6 @@ void VkApp::onPaint()
     cmdBufferBeginInfo.pNext = nullptr;
     cmdBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     cmdBufferBeginInfo.pInheritanceInfo = nullptr;
-
-#ifdef WAIT_PRESENT_FENCE
-    vkResetFences(device, 1, &cmdSubmitFences[imageIndex]);
-#endif
 
     vkResetCommandBuffer(cmdBuffer, 0);
     VkResult result = vkBeginCommandBuffer(cmdBuffer, &cmdBufferBeginInfo);
@@ -498,6 +493,7 @@ void VkApp::createSyncPrimitices()
     cmdSubmitFences.resize(cmdBuffers.size());
     for (VkFence& fence: cmdSubmitFences)
         result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
+    vkResetFences(device, cmdSubmitFences.size(), cmdSubmitFences.data());
 #endif // WAIT_PRESENT_FENCE
 }
 
@@ -570,16 +566,18 @@ void VkApp::present(uint32_t imageIndex)
 
 void VkApp::waitForPresentComplete(uint32_t imageIndex)
 {
+    VkResult result;
 #ifdef WAIT_PRESENT_FENCE
-    constexpr uint64_t timeout = 10 * 1000000; // 10 ms
-    VkResult result = vkWaitForFences(device, 1, &cmdSubmitFences[imageIndex], VK_FALSE, timeout);
-    if (VK_TIMEOUT == result)
-        OutputDebugStringA("timeout has expired\n");
-    else
-        CHECK_SUCCEEDED(result, "wait for fence failed");
+    do
+    {
+        result = vkWaitForFences(device, 1, &cmdSubmitFences[imageIndex], VK_FALSE, TIMEOUT);
+        if (VK_TIMEOUT == result)
+            OutputDebugStringA("wait for fence timeout expired\n");
+    } while (VK_TIMEOUT == result);
+    CHECK_SUCCEEDED(result, "wait for fence failed");
+    vkResetFences(device, 1, &cmdSubmitFences[imageIndex]);
 #else
-    VkResult result = vkDeviceWaitIdle(device);
-    assert(VK_SUCCESS == result);
+    result = vkDeviceWaitIdle(device);
     CHECK_SUCCEEDED(result, "wait for device to become idle failed");
 #endif // !WAIT_PRESENT_FENCE
 }

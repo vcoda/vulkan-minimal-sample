@@ -49,7 +49,6 @@ private:
     VkCommandBuffer transferCmdBuffer = VK_NULL_HANDLE;
     VkSemaphore presentSemaphore = VK_NULL_HANDLE;
     VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
-    VkFence transferFence = VK_NULL_HANDLE;
 
     std::vector<VkExtensionProperties> extensionProperties;
     std::vector<VkQueueFamilyProperties> queueFamilyProperties;
