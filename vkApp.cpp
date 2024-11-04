@@ -1,6 +1,8 @@
 #include <array>
 #include <string>
 #include <limits>
+#include <stdexcept>
+#include <cmath>
 #include <cassert>
 #include "vkApp.h"
 
