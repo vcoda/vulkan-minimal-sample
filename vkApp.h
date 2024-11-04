@@ -27,6 +27,7 @@ private:
     void createSyncPrimitices();
     void submit(uint32_t imageIndex);
     void present(uint32_t imageIndex);
+    void waitForPresentComplete(uint32_t imageIndex);
     bool findExtension(const char *extensionName) const;
     uint32_t chooseFamilyIndex(VkQueueFlagBits queueType) const;
 
@@ -46,7 +47,7 @@ private:
     VkCommandBuffer computeCmdBuffer = VK_NULL_HANDLE;
     VkCommandBuffer transferCmdBuffer = VK_NULL_HANDLE;
     VkSemaphore presentSemaphore = VK_NULL_HANDLE;
-    VkSemaphore renderSemaphore = VK_NULL_HANDLE;
+    VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
     VkFence transferFence = VK_NULL_HANDLE;
 
     std::vector<VkExtensionProperties> extensionProperties;
@@ -55,7 +56,7 @@ private:
     std::vector<VkImageView> swapchainImageViews;
     std::vector<VkFramebuffer> framebuffers;
     std::vector<VkCommandBuffer> cmdBuffers;
-    std::vector<VkFence> waitRenderFences;
+    std::vector<VkFence> cmdSubmitFences;
 
     Timer timer;
     float time = 0.f;

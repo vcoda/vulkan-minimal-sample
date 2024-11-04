@@ -6,6 +6,7 @@
 
 #define SCREEN_WIDTH 1920
 #define SCREEN_HEIGHT 1080
+#define WAIT_PRESENT_FENCE
 
 #define CHECK_SUCCEEDED(result, message)\
     if (VK_SUCCESS != result)\
@@ -30,10 +31,10 @@ VkApp::VkApp(const Entry& entry, LPCTSTR caption, uint32_t width, uint32_t heigh
 VkApp::~VkApp()
 {
     vkDestroyFence(device, transferFence, nullptr);
-    for (auto fence: waitRenderFences)
+    for (auto fence: cmdSubmitFences)
         vkDestroyFence(device, fence, nullptr);
     vkDestroySemaphore(device, presentSemaphore, nullptr);
-    vkDestroySemaphore(device, renderSemaphore, nullptr);
+    vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
     vkFreeCommandBuffers(device, transferCmdPool, 1, &transferCmdBuffer);
     vkFreeCommandBuffers(device, computeCmdPool, 1, &computeCmdBuffer);
     vkFreeCommandBuffers(device, graphicsCmdPool, (uint32_t)cmdBuffers.size(), cmdBuffers.data());
@@ -69,17 +70,16 @@ void VkApp::onIdle()
 
 void VkApp::onPaint()
 {
-    constexpr uint64_t timeout = std::numeric_limits<uint64_t>::max();
-
+    constexpr uint64_t timeout = 10 * 1000000; // 10 ms
     uint32_t imageIndex = 0;
     VkResult result = vkAcquireNextImageKHR(device, swapchain, timeout, presentSemaphore, VK_NULL_HANDLE, &imageIndex);
-    assert(VK_SUCCESS == result);
-    if (VK_SUCCESS != result)
+    if (VK_TIMEOUT == result)
+        OutputDebugStringA("acquire image timeout has expired\n");
+    else if (VK_SUCCESS != result)
         return;
 
     VkFramebuffer framebuffer = framebuffers[imageIndex];
     VkCommandBuffer cmdBuffer = cmdBuffers[imageIndex];
-    VkFence fence = waitRenderFences[imageIndex];
 
     VkCommandBufferBeginInfo cmdBufferBeginInfo;
     cmdBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -87,7 +87,10 @@ void VkApp::onPaint()
     cmdBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     cmdBufferBeginInfo.pInheritanceInfo = nullptr;
 
-    vkResetFences(device, 1, &fence);
+#ifdef WAIT_PRESENT_FENCE
+    vkResetFences(device, 1, &cmdSubmitFences[imageIndex]);
+#endif
+
     vkResetCommandBuffer(cmdBuffer, 0);
     result = vkBeginCommandBuffer(cmdBuffer, &cmdBufferBeginInfo);
     assert(VK_SUCCESS == result);
@@ -117,6 +120,7 @@ void VkApp::onPaint()
 
     submit(imageIndex);
     present(imageIndex);
+    waitForPresentComplete(imageIndex);
 
     ++frameCount;
     float dt = timer.millisecondsElapsed();
@@ -249,11 +253,6 @@ void VkApp::createLogicalDevice()
     }
 #endif // _DEBUG
 
-    VkPhysicalDeviceFeatures features = {};
-    features.multiDrawIndirect = VK_TRUE;
-    features.textureCompressionBC = VK_TRUE;
-    features.largePoints = VK_TRUE;
-    features.fillModeNonSolid = VK_TRUE;
     const float defaultQueuePriorities[1] = {1.f};
 
     VkDeviceQueueCreateInfo graphicsQueueInfo, computeQueueInfo, transferQueueInfo;
@@ -278,7 +277,7 @@ void VkApp::createLogicalDevice()
 
     VkDeviceCreateInfo deviceInfo;
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    deviceInfo.pNext = nullptr;//&deviceFeatures2;
+    deviceInfo.pNext = nullptr;
     deviceInfo.flags = 0;
     deviceInfo.queueCreateInfoCount = (uint32_t)queueCreateInfos.size();
     deviceInfo.pQueueCreateInfos = queueCreateInfos.data();
@@ -490,15 +489,20 @@ void VkApp::createSyncPrimitices()
     semaphoreInfo.pNext = nullptr;
     semaphoreInfo.flags = 0;
     VkResult result = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &presentSemaphore);
-    result = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderSemaphore);
+    result = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore);
     CHECK_SUCCEEDED(result, "failed to create semephore");
+
     VkFenceCreateInfo fenceInfo;
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.pNext = nullptr;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    waitRenderFences.resize(cmdBuffers.size());
-    for (VkFence& fence: waitRenderFences)
+
+#ifdef WAIT_PRESENT_FENCE
+    cmdSubmitFences.resize(cmdBuffers.size());
+    for (VkFence& fence: cmdSubmitFences)
         result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
+#endif // WAIT_PRESENT_FENCE
+
     result = vkCreateFence(device, &fenceInfo, nullptr, &transferFence);
     CHECK_SUCCEEDED(result, "failed to create fence");
 }
@@ -515,8 +519,13 @@ void VkApp::submit(uint32_t imageIndex)
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmdBuffers[imageIndex];
     submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &renderSemaphore;
-    VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, waitRenderFences[imageIndex]);
+    submitInfo.pSignalSemaphores = &renderFinishedSemaphore; // Will be signaled when the command buffers for this batch have completed execution
+
+#ifdef WAIT_PRESENT_FENCE
+    VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, cmdSubmitFences[imageIndex]);
+#else
+    VkResult result = vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+#endif
     CHECK_SUCCEEDED(result, "queue submission failed");
 }
 
@@ -526,17 +535,30 @@ void VkApp::present(uint32_t imageIndex)
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.pNext = nullptr;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &renderSemaphore;
+    presentInfo.pWaitSemaphores = &renderFinishedSemaphore; // Wait for command buffers have completed execution before issuing the present request
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &swapchain;
     presentInfo.pImageIndices = &imageIndex;
     presentInfo.pResults = nullptr;
+
     VkResult result = vkQueuePresentKHR(graphicsQueue, &presentInfo);
     CHECK_SUCCEEDED(result, "present failed");
+}
 
-    constexpr uint64_t timeout = std::numeric_limits<uint64_t>::max();
-    VkFence fence = waitRenderFences[imageIndex];
-    vkWaitForFences(device, 1, &fence, VK_FALSE, timeout);
+void VkApp::waitForPresentComplete(uint32_t imageIndex)
+{
+#ifdef WAIT_PRESENT_FENCE
+    constexpr uint64_t timeout = 10 * 1000000; // 10 ms
+    VkResult result = vkWaitForFences(device, 1, &cmdSubmitFences[imageIndex], VK_FALSE, timeout);
+    if (VK_TIMEOUT == result)
+        OutputDebugStringA("timeout has expired\n");
+    else
+        CHECK_SUCCEEDED(result, "wait for fence failed");
+#else
+    VkResult result = vkDeviceWaitIdle(device);
+    assert(VK_SUCCESS == result);
+    CHECK_SUCCEEDED(result, "wait for device to become idle failed");
+#endif // !WAIT_PRESENT_FENCE
 }
 
 bool VkApp::findExtension(const char *extensionName) const
