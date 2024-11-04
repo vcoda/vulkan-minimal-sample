@@ -25,6 +25,7 @@ private:
     void createCommandPools();
     void createCommandBuffers();
     void createSyncPrimitices();
+    uint32_t aquireNextImage() const;
     void submit(uint32_t imageIndex);
     void present(uint32_t imageIndex);
     void waitForPresentComplete(uint32_t imageIndex);

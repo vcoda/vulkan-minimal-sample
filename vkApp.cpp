@@ -8,6 +8,9 @@
 
 #define SCREEN_WIDTH 1920
 #define SCREEN_HEIGHT 1080
+#define MILLISECOND 1000000
+#define TIMEOUT 1 * MILLISECOND
+
 #define WAIT_PRESENT_FENCE
 
 #define CHECK_SUCCEEDED(result, message)\
@@ -72,14 +75,7 @@ void VkApp::onIdle()
 
 void VkApp::onPaint()
 {
-    constexpr uint64_t timeout = 10 * 1000000; // 10 ms
-    uint32_t imageIndex = 0;
-    VkResult result = vkAcquireNextImageKHR(device, swapchain, timeout, presentSemaphore, VK_NULL_HANDLE, &imageIndex);
-    if (VK_TIMEOUT == result)
-        OutputDebugStringA("acquire image timeout has expired\n");
-    else if (VK_SUCCESS != result)
-        return;
-
+    const uint32_t imageIndex = aquireNextImage();
     VkFramebuffer framebuffer = framebuffers[imageIndex];
     VkCommandBuffer cmdBuffer = cmdBuffers[imageIndex];
 
@@ -94,7 +90,7 @@ void VkApp::onPaint()
 #endif
 
     vkResetCommandBuffer(cmdBuffer, 0);
-    result = vkBeginCommandBuffer(cmdBuffer, &cmdBufferBeginInfo);
+    VkResult result = vkBeginCommandBuffer(cmdBuffer, &cmdBufferBeginInfo);
     assert(VK_SUCCESS == result);
     if (VK_SUCCESS == result)
     {
@@ -494,19 +490,44 @@ void VkApp::createSyncPrimitices()
     result = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore);
     CHECK_SUCCEEDED(result, "failed to create semephore");
 
+#ifdef WAIT_PRESENT_FENCE
     VkFenceCreateInfo fenceInfo;
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.pNext = nullptr;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-#ifdef WAIT_PRESENT_FENCE
     cmdSubmitFences.resize(cmdBuffers.size());
     for (VkFence& fence: cmdSubmitFences)
         result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
 #endif // WAIT_PRESENT_FENCE
+}
 
-    result = vkCreateFence(device, &fenceInfo, nullptr, &transferFence);
-    CHECK_SUCCEEDED(result, "failed to create fence");
+uint32_t VkApp::aquireNextImage() const
+{
+    uint32_t imageIndex = 0;
+    VkResult result;
+    do
+    {
+        result = vkAcquireNextImageKHR(device, swapchain, TIMEOUT, presentSemaphore, VK_NULL_HANDLE, &imageIndex);
+        if (VK_TIMEOUT == result)
+            OutputDebugStringA("image acquire timeout expired\n");
+    } while (VK_TIMEOUT == result);
+    switch (result)
+    {
+    case VK_NOT_READY:
+        OutputDebugStringA("surface not ready\n");
+        break;
+    case VK_SUBOPTIMAL_KHR:
+        OutputDebugStringA("suboptimal\n");
+        break;
+    }
+    // VK_ERROR_OUT_OF_HOST_MEMORY
+    // VK_ERROR_OUT_OF_DEVICE_MEMORY
+    // VK_ERROR_DEVICE_LOST
+    // VK_ERROR_OUT_OF_DATE_KHR
+    // VK_ERROR_SURFACE_LOST_KHR
+    // VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT
+    CHECK_SUCCEEDED(result, "image acquire failed");
+    return imageIndex;
 }
 
 void VkApp::submit(uint32_t imageIndex)
