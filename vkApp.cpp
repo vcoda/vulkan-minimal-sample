@@ -9,8 +9,9 @@
 #define SCREEN_WIDTH 1920
 #define SCREEN_HEIGHT 1080
 #define MILLISECOND 1000000
-#define TIMEOUT 1 * MILLISECOND
+#define TIMEOUT 2 * MILLISECOND
 
+// Wait for fence, vkDeviceWaitIdle() is slower on Nvidia
 #define WAIT_PRESENT_FENCE
 
 #define CHECK_SUCCEEDED(result, message)\
